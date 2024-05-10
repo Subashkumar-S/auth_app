@@ -8,6 +8,11 @@ const passport = require('passport');
 const session = require('express-session');
 const LocalStrategy = require('passport-local').Strategy;
 const port = 8080;
+require("dotenv").config();
+// const methodOverride = require('method-override');
+const bodyParser = require('body-parser');
+
+
 
 const userSchema = new mongoose.Schema({
     fullName: {
@@ -30,64 +35,94 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-mongoose.connect("mongodb+srv://subashs2232:subash2232@cluster0.ha0obgf.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0");
+mongoose.connect(process.env.MONGO_URL);
 const connection = mongoose.connection;
 connection.on( 'open' , () => { console.log("Database connected")});
 
-app.set('view-engine', 'ejs')
-app.use(express.urlencoded({ extended: false }));
+app.set('view engine', 'ejs');
+app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.json());
-app.use(router);
 app.use(session({
     secret: "secret",
     resave: false,
     saveUninitialized: true,
 }));
+
 app.use(passport.initialize());
 app.use(passport.session());
 
-authUser = (email, password, done) => {
-    console.log('Authenticating user:', email);
-    User.findOne({"email": email}, function(err, user){
-        if(err) {
-            console.error('Error finding user:', err);
-            return done(err);
-        } else if(!user){
+app.use(router);
+// app.use(methodOverride('_method'))
+
+
+
+
+
+passport.use(new LocalStrategy({
+    usernameField: 'email',
+    passwordField: 'password'
+}, async (email, password, done) => {
+    console.log('Authenticating user called: ' + email);
+    try {
+        const user = await User.findOne({ email });
+        console.log('User retrieved from database:', user);
+
+        if (!user) {
             console.log('User not found:', email);
             return done(null, false);
-        } else if(!user.password){
-            console.log('User has no password:', email);
+        }
+         console.log("Entered password: " + password);
+
+        console.log("Retrieved password from database:", user.password);
+        const hashedPassword = await user.password;
+        console.log("Hashed password from database:", hashedPassword);
+
+        console.log("Password for comparing "+ password);
+        console.log("Hashed password for comparing " + hashedPassword);
+        const passwordMatch = await bcrypt.compare(password, hashedPassword);
+        console.log("password match :" + passwordMatch);
+        if (!passwordMatch) {
+            console.log('Incorrect password for user:', email);
             return done(null, false);
         }
-        console.log("User found and authenticated:", email);
+        console.log('User authenticated:', email);
         return done(null, user);
-    });
-}
+    } catch (err) {
+        console.error('Error finding user:', err);
+        return done(err);
+    }
+}));
 
 
-passport.use(new LocalStrategy( 'local' ,authUser));
+
 passport.serializeUser((user, done) =>{
-
     done(null, user.id);
 });
 passport.deserializeUser((id, done) =>{
-    User.findById(id, function(err, user) {
-        done(err, user);
-    });
+    console.log("---------> Deserialize Id");
+    console.log(id);
+    User.findById(id)
+        .then(user => {
+            done(null, user);
+        })
+        .catch(err => {
+            done(err, null);
+        });
+    // done(id, user);
 })
 
 
 
 
 router.get('/', (req, res) => {
-    res.send('Home page!');
+    res.render('home');
   })
 
-router.get('/signup', (req, res) => {
-    res.render('signup.ejs');
+router.get('/signup', checkNotAuthenticated, (req, res) => {
+    res.render('signup');
 })
 
-router.post('/signup', async (req, res) => {
+router.post('/signup', checkNotAuthenticated, async (req, res) => {
    try{
     let user = await User.findOne({'email': req.body.email});
     if(user){
@@ -107,9 +142,7 @@ router.post('/signup', async (req, res) => {
         user.save()
             .then(user => { console.log("user saved successfully", user)})
             .catch(err => {console.log("error saving user", err)});
-        res.redirect("/user");
-        return res.status(201).json(user);
-
+            res.redirect("/login");
     }
 
    } catch (err){
@@ -117,19 +150,51 @@ router.post('/signup', async (req, res) => {
    }
 })
 
-router.get('/user', (req, res) => {
-    res.send('User page!');
+router.get('/dashboard', checkAuthenticated, (req, res) => {
+    console.log("request to dashboard" +req.user);
+    const userName = req.user.fullName;
+    res.render('dashboard', { name: userName });
 })
 
-router.get('/login', (req, res) => {
-    res.render('login.ejs');
+router.get('/login', checkNotAuthenticated, (req, res) => {
+    res.render('login');
 })
 
-router.post('/login', passport.authenticate('local', {
-    successRedirect: "/user",
-    failureRedirect: "/login"
-}))
-  
+app.post('/login', checkNotAuthenticated,
+    passport.authenticate('local', {
+    successRedirect: '/dashboard',
+    failureRedirect: '/login',
+    failureFlash: true
+}));
+
+
+
+
+app.post('/logout', (req, res) => {
+  req.logOut((err) => {
+    if(err){
+        console.error(err);
+        res.status(500).send('Error during logout');
+    }
+  });
+  res.redirect('/');
+});
+
+function checkAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return next()
+  }
+
+  res.redirect('/login')
+}
+
+function checkNotAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return res.redirect('/dashboard');
+  }
+  next()
+}
+
 app.listen(port, () => {
     console.log(`Server listening on port ${port}`)
   })
