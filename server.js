@@ -93,6 +93,7 @@ app.use(router);
 
 
 passport.use(new LocalStrategy({
+    
     usernameField: 'email',
     passwordField: 'password'
 }, async (email, password, done) => {
